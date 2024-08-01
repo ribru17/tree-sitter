@@ -1,6 +1,7 @@
 #include <cassert>
 #include <fstream>
 #include "tree_sitter/api.h"
+#include "../../lib/src/array.h"
 
 extern "C" const TSLanguage *TS_LANG();
 
@@ -18,15 +19,17 @@ extern "C" int LLVMFuzzerInitialize(int *argc, char ***argv) {
     assert(f.good());
     std::string lang_query_source((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 
-    uint32_t error_offset = 0;
-    TSQueryError error_type = TSQueryErrorNone;
+    Array(uint32_t) error_offsets = array_new();
+    array_push(error_offsets, 0);
+    Array(TSQueryError) error_types = array_new();
+    array_push(error_types, TSQueryErrorNone);
 
     lang_query = ts_query_new(
       TS_LANG(),
       lang_query_source.c_str(),
       lang_query_source.size(),
-      &error_offset,
-      &error_type
+      &error_offsets,
+      &error_types
     );
 
     assert(lang_query);

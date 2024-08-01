@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include "../array.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -815,8 +816,8 @@ TSQuery *ts_query_new(
   const TSLanguage *language,
   const char *source,
   uint32_t source_len,
-  uint32_t *error_offset,
-  TSQueryError *error_type
+  Array(uint32_t) *error_offsets,
+  Array(TSQueryError) *error_types
 );
 
 /**

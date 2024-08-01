@@ -2670,15 +2670,17 @@ TSQuery *ts_query_new(
   const TSLanguage *language,
   const char *source,
   uint32_t source_len,
-  uint32_t *error_offset,
-  TSQueryError *error_type
+  Array(uint32_t) *error_offsets,
+  Array(TSQueryError) *error_types
 ) {
+  array_clear(error_offsets);
+  array_clear(error_types);
   if (
     !language ||
     language->version > TREE_SITTER_LANGUAGE_VERSION ||
     language->version < TREE_SITTER_MIN_COMPATIBLE_LANGUAGE_VERSION
   ) {
-    *error_type = TSQueryErrorLanguage;
+    array_push(error_types, TSQueryErrorLanguage);
     return NULL;
   }
 
@@ -2704,6 +2706,7 @@ TSQuery *ts_query_new(
   // Parse all of the S-expressions in the given string.
   Stream stream = stream_new(source, source_len);
   stream_skip_whitespace(&stream);
+  bool did_error = false;
   while (stream.input < stream.end) {
     uint32_t pattern_index = self->patterns.size;
     uint32_t start_step_index = self->steps.size;
@@ -2715,7 +2718,7 @@ TSQuery *ts_query_new(
       .is_non_local = false,
     }));
     CaptureQuantifiers capture_quantifiers = capture_quantifiers_new();
-    *error_type = ts_query__parse_pattern(self, &stream, 0, false, &capture_quantifiers);
+    TSQueryError current_error_type = ts_query__parse_pattern(self, &stream, 0, false, &capture_quantifiers);
     array_push(&self->steps, query_step__new(0, PATTERN_DONE_MARKER, false));
 
     QueryPattern *pattern = array_back(&self->patterns);
@@ -2725,12 +2728,13 @@ TSQuery *ts_query_new(
 
     // If any pattern could not be parsed, then report the error information
     // and terminate.
-    if (*error_type) {
-      if (*error_type == PARENT_DONE) *error_type = TSQueryErrorSyntax;
-      *error_offset = stream_offset(&stream);
+    if (current_error_type) {
+      if (current_error_type == PARENT_DONE) array_push(error_types, TSQueryErrorSyntax);
+      array_push(error_offsets, stream_offset(&stream));
       capture_quantifiers_delete(&capture_quantifiers);
       ts_query_delete(self);
-      return NULL;
+      did_error = true;
+      continue;
     }
 
     // Maintain a list of capture quantifiers for each pattern
@@ -2791,10 +2795,18 @@ TSQuery *ts_query_new(
     }
   }
 
-  if (!ts_query__analyze_patterns(self, error_offset)) {
-    *error_type = TSQueryErrorStructure;
+  if (did_error) {
     ts_query_delete(self);
     return NULL;
+  }
+
+  for (int i = 0; i < error_offsets->size; i++) {
+    if (!ts_query__analyze_patterns(self, array_get(error_offsets, i))) {
+      array_clear(error_types);
+      array_push(error_types, TSQueryErrorStructure);
+      ts_query_delete(self);
+      return NULL;
+    }
   }
 
   array_delete(&self->string_buffer);
