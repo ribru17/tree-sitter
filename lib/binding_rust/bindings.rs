@@ -569,6 +569,14 @@ extern "C" {
     pub fn ts_query_string_count(self_: *const TSQuery) -> u32;
 }
 extern "C" {
+    #[doc = " Check a query pattern for errors."]
+    pub fn ts_query_parse_pattern(
+        language: *const TSLanguage,
+        source: *const ::core::ffi::c_char,
+        source_len: u32,
+    ) -> TSQueryError;
+}
+extern "C" {
     #[doc = " Get the byte offset where the given pattern starts in the query's source.\n\n This can be useful when combining queries by concatenating their source\n code strings."]
     pub fn ts_query_start_byte_for_pattern(self_: *const TSQuery, pattern_index: u32) -> u32;
 }

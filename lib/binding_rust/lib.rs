@@ -2058,6 +2058,28 @@ impl Query {
         unsafe { Self::from_raw_parts(ptr, source) }
     }
 
+    /// Check a query pattern for errors.
+    #[doc(alias = "ts_query_parse_pattern")]
+    #[must_use]
+    pub fn parse_pattern(language: &Language, source: &str) -> QueryErrorKind {
+        let bytes = source.as_bytes();
+        let error_type = unsafe {
+            ffi::ts_query_parse_pattern(
+                language.0,
+                bytes.as_ptr().cast::<c_char>(),
+                bytes.len() as u32,
+            )
+        };
+        match error_type {
+            ffi::TSQueryErrorNodeType => QueryErrorKind::NodeType,
+            ffi::TSQueryErrorField => QueryErrorKind::Field,
+            ffi::TSQueryErrorCapture => QueryErrorKind::Capture,
+            ffi::TSQueryErrorSyntax => QueryErrorKind::Syntax,
+            ffi::TSQueryErrorLanguage => QueryErrorKind::Language,
+            _ => QueryErrorKind::Structure,
+        }
+    }
+
     #[doc(hidden)]
     unsafe fn from_raw_parts(ptr: *mut ffi::TSQuery, source: &str) -> Result<Self, QueryError> {
         let ptr = {

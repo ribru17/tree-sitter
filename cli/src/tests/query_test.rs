@@ -341,6 +341,11 @@ fn test_query_errors_on_impossible_patterns() {
             })
         );
 
+        assert_eq!(Query::parse_pattern(
+            &js_lang,
+            "(binary_expression left: (expression (identifier)) left: (expression (identifier)))",
+        ), QueryErrorKind::Structure);
+
         Query::new(
             &js_lang,
             "(function_declaration name: (identifier) (statement_block))",

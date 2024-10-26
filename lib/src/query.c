@@ -2801,6 +2801,50 @@ TSQuery *ts_query_new(
   return self;
 }
 
+TSQueryError ts_query_parse_pattern(const TSLanguage *language, const char *source, uint32_t source_len) {
+  if (
+    !language ||
+    language->version > TREE_SITTER_LANGUAGE_VERSION ||
+    language->version < TREE_SITTER_MIN_COMPATIBLE_LANGUAGE_VERSION
+  ) {
+    return TSQueryErrorLanguage;
+  }
+
+  TSQuery *query = ts_malloc(sizeof(TSQuery));
+  *query = (TSQuery) {
+    .steps = array_new(),
+    .pattern_map = array_new(),
+    .captures = symbol_table_new(),
+    .capture_quantifiers = array_new(),
+    .predicate_values = symbol_table_new(),
+    .predicate_steps = array_new(),
+    .patterns = array_new(),
+    .step_offsets = array_new(),
+    .string_buffer = array_new(),
+    .negated_fields = array_new(),
+    .repeat_symbols_with_rootless_patterns = array_new(),
+    .wildcard_root_pattern_count = 0,
+    .language = ts_language_copy(language),
+  };
+
+  array_push(&query->negated_fields, 0);
+
+  Stream stream = stream_new(source, source_len);
+  stream_skip_whitespace(&stream);
+
+  array_push(&query->patterns, ((QueryPattern) {
+    .steps = (Slice) {.offset = 0},
+    .predicate_steps = (Slice) {.offset = 0},
+    .start_byte = stream_offset(&stream),
+    .is_non_local = false,
+  }));
+
+  CaptureQuantifiers capture_quantifiers = capture_quantifiers_new();
+  TSQueryError err = ts_query__parse_pattern(query, &stream, 0, false, &capture_quantifiers);
+  ts_query_delete(query);
+  return err;
+}
+
 void ts_query_delete(TSQuery *self) {
   if (self) {
     array_delete(&self->steps);
