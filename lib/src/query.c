@@ -1801,10 +1801,13 @@ static bool ts_query__analyze_patterns(TSQuery *self, unsigned *error_offset) {
   AnalysisSubgraphArray subgraphs = ts_language_make_subgraphs(self->language);
 
   QueryAnalysis analysis = query_analysis__new();
+  Array(uint16_t) predicate_capture_ids = array_new();
   bool structure_is_valid = ts_query__validate_structure(self, error_offset, &subgraphs, &parent_step_indices, &analysis);
+  if (!structure_is_valid) {
+    goto cleanup;
+  }
 
   // Mark as indefinite any step with captures that are used in predicates.
-  Array(uint16_t) predicate_capture_ids = array_new();
   for (unsigned i = 0; i < self->patterns.size; i++) {
     QueryPattern *pattern = &self->patterns.contents[i];
 
@@ -1968,6 +1971,7 @@ static bool ts_query__analyze_patterns(TSQuery *self, unsigned *error_offset) {
   #endif
 
   // Cleanup
+cleanup:
   for (unsigned i = 0; i < subgraphs.size; i++) {
     array_delete(&subgraphs.contents[i].start_states);
     array_delete(&subgraphs.contents[i].nodes);
