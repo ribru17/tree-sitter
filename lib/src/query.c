@@ -1490,6 +1490,12 @@ AnalysisSubgraphArray ts_language_make_subgraphs(const TSLanguage *self) {
   // one of the parent nodes, such that their children appear to belong to the
   // parent.
   AnalysisSubgraphArray subgraphs = array_new();
+  // NOTE: This was changed. Instead of only constructing a subgraph over hidden
+  // symbols and symbols found in queries, we now construct it over ALL
+  // non-token symbols. The downside of this is that the graph is much larger,
+  // and POTENTIALLY (not tested) noticeably slower to iterate? However the
+  // benefit is that it can be computed regardless of query input, so it can be
+  // computed and cached once the language is loaded, and re-referenced forever.
   array_reserve(&subgraphs, self->symbol_count + self->alias_count - self->token_count);
   for (TSSymbol sym = (uint16_t)self->token_count; sym < (uint16_t)self->symbol_count + self->alias_count; sym++) {
     AnalysisSubgraph subgraph = { .symbol = sym };
@@ -1583,6 +1589,9 @@ AnalysisSubgraphArray ts_language_make_subgraphs(const TSLanguage *self) {
   for (unsigned i = 0; i < subgraphs.size; i++) {
     AnalysisSubgraph *subgraph = &subgraphs.contents[i];
     if (subgraph->nodes.size == 0) {
+      // NOTE: Instead of removing here, just mark as terminal? We can then
+      // eventually convert this to be map-like (constant-time lookups vs
+      // logarithmic)
       array_delete(&subgraph->start_states);
       array_erase(&subgraphs, i);
       i--;
@@ -2797,10 +2806,12 @@ bool ts_query_validate_structure(
   const TSLanguage *language,
   const char *source,
   uint32_t source_len,
+  const AnalysisSubgraphArray *subgraphs,
   uint32_t *error_offset,
   TSQueryError *error_type
 ) {
-
+  // TODO: Validate query structure using the new helper methods. Note that
+  // `subgraphs` can be pre-computed once the language loads, and reused.
 }
 
 TSQuery *ts_query_new(
@@ -2837,6 +2848,9 @@ TSQuery *ts_query_new(
   };
 
   array_push(&self->negated_fields, 0);
+
+  // TODO: Put this parsing logic into a separate function to be used by
+  // ts_query_validate_structure
 
   // Parse all of the S-expressions in the given string.
   Stream stream = stream_new(source, source_len);
