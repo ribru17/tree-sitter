@@ -3,11 +3,13 @@
  * from the namespace; however, we need non-standard symbols for
  * endian.h.
  */
+#include <stdio.h>
 #if defined(__NetBSD__) && defined(_POSIX_C_SOURCE)
 #undef _POSIX_C_SOURCE
 #endif
 
 #include "tree_sitter/api.h"
+#include <time.h>
 #include "./alloc.h"
 #include "./array.h"
 #include "./clock.h"
@@ -1690,6 +1692,9 @@ static bool ts_query__analyze_patterns(TSQuery *self, unsigned *error_offset) {
     }
   #endif
 
+  double parsedone = clock();
+  printf("Subgraph creation done: %f\n", parsedone / CLOCKS_PER_SEC);
+
   // For each non-terminal pattern, determine if the pattern can successfully match,
   // and identify all of the possible children within the pattern where matching could fail.
   bool all_patterns_are_valid = true;
@@ -1792,6 +1797,9 @@ static bool ts_query__analyze_patterns(TSQuery *self, unsigned *error_offset) {
       }
     }
   }
+
+  double structdone = clock();
+  printf("Structure validation done: %f\n", structdone / CLOCKS_PER_SEC);
 
   // Mark as indefinite any step with captures that are used in predicates.
   Array(uint16_t) predicate_capture_ids = array_new();
@@ -1969,6 +1977,9 @@ static bool ts_query__analyze_patterns(TSQuery *self, unsigned *error_offset) {
   array_delete(&parent_step_indices);
   array_delete(&predicate_capture_ids);
   state_predecessor_map_delete(&predecessor_map);
+
+  double workdone = clock();
+  printf("Work done: %f\n", workdone / CLOCKS_PER_SEC);
 
   return all_patterns_are_valid;
 }
@@ -2781,6 +2792,8 @@ TSQuery *ts_query_new(
   uint32_t *error_offset,
   TSQueryError *error_type
 ) {
+  double start = clock();
+  printf("Start: %f\n", start / CLOCKS_PER_SEC);
   if (
     !language ||
     language->abi_version > TREE_SITTER_LANGUAGE_VERSION ||
@@ -2898,6 +2911,8 @@ TSQuery *ts_query_new(
       }
     }
   }
+  double parsedone = clock();
+  printf("Parsing done: %f\n", parsedone / CLOCKS_PER_SEC);
 
   if (!ts_query__analyze_patterns(self, error_offset)) {
     *error_type = TSQueryErrorStructure;
