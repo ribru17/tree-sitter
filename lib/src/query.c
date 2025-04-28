@@ -1480,7 +1480,7 @@ static void ts_query__perform_analysis(
   }
 }
 
-AnalysisSubgraphArray ts_language_make_subgraphs(const TSQuery *self, const ParentStepIndices *parent_step_indices) {
+AnalysisSubgraphArray ts_language_make_subgraphs(const TSLanguage *self) {
   // For every parent symbol in the query, initialize an 'analysis subgraph'.
   // This subgraph lists all of the states in the parse table that are directly
   // involved in building subtrees for this symbol.
@@ -1490,17 +1490,10 @@ AnalysisSubgraphArray ts_language_make_subgraphs(const TSQuery *self, const Pare
   // one of the parent nodes, such that their children appear to belong to the
   // parent.
   AnalysisSubgraphArray subgraphs = array_new();
-  for (unsigned i = 0; i < parent_step_indices->size; i++) {
-    uint32_t parent_step_index = parent_step_indices->contents[i];
-    TSSymbol parent_symbol = self->steps.contents[parent_step_index].symbol;
-    AnalysisSubgraph subgraph = { .symbol = parent_symbol };
-    array_insert_sorted_by(&subgraphs, .symbol, subgraph);
-  }
-  for (TSSymbol sym = (uint16_t)self->language->token_count; sym < (uint16_t)self->language->symbol_count; sym++) {
-    if (!ts_language_symbol_metadata(self->language, sym).visible) {
-      AnalysisSubgraph subgraph = { .symbol = sym };
-      array_insert_sorted_by(&subgraphs, .symbol, subgraph);
-    }
+  array_reserve(&subgraphs, self->symbol_count + self->alias_count - self->token_count);
+  for (TSSymbol sym = (uint16_t)self->token_count; sym < (uint16_t)self->symbol_count + self->alias_count; sym++) {
+    AnalysisSubgraph subgraph = { .symbol = sym };
+    array_push(&subgraphs, subgraph);
   }
 
   // Scan the parse table to find the data needed to populate these subgraphs.
@@ -1509,10 +1502,10 @@ AnalysisSubgraphArray ts_language_make_subgraphs(const TSQuery *self, const Pare
   //   2) All of the parse states where one of these symbols can end, along
   //      with information about the node that would be created.
   //   3) A list of predecessor states for each state.
-  StatePredecessorMap predecessor_map = state_predecessor_map_new(self->language);
-  for (TSStateId state = 1; state < (uint16_t)self->language->state_count; state++) {
+  StatePredecessorMap predecessor_map = state_predecessor_map_new(self);
+  for (TSStateId state = 1; state < (uint16_t)self->state_count; state++) {
     unsigned subgraph_index, exists;
-    LookaheadIterator lookahead_iterator = ts_language_lookaheads(self->language, state);
+    LookaheadIterator lookahead_iterator = ts_language_lookaheads(self, state);
     while (ts_lookahead_iterator__next(&lookahead_iterator)) {
       if (lookahead_iterator.action_count) {
         for (unsigned i = 0; i < lookahead_iterator.action_count; i++) {
@@ -1520,7 +1513,7 @@ AnalysisSubgraphArray ts_language_make_subgraphs(const TSQuery *self, const Pare
           if (action->type == TSParseActionTypeReduce) {
             const TSSymbol *aliases, *aliases_end;
             ts_language_aliases_for_symbol(
-              self->language,
+              self,
               action->reduce.symbol,
               &aliases,
               &aliases_end
@@ -1554,10 +1547,10 @@ AnalysisSubgraphArray ts_language_make_subgraphs(const TSQuery *self, const Pare
         if (lookahead_iterator.next_state != state) {
           state_predecessor_map_add(&predecessor_map, lookahead_iterator.next_state, state);
         }
-        if (ts_language_state_is_primary(self->language, state)) {
+        if (ts_language_state_is_primary(self, state)) {
           const TSSymbol *aliases, *aliases_end;
           ts_language_aliases_for_symbol(
-            self->language,
+            self,
             lookahead_iterator.symbol,
             &aliases,
             &aliases_end
@@ -1702,7 +1695,7 @@ static bool ts_query__analyze_patterns(TSQuery *self, unsigned *error_offset) {
     }
   }
 
-  AnalysisSubgraphArray subgraphs = ts_language_make_subgraphs(self, &parent_step_indices);
+  AnalysisSubgraphArray subgraphs = ts_language_make_subgraphs(self->language);
 
   // For each non-terminal pattern, determine if the pattern can successfully match,
   // and identify all of the possible children within the pattern where matching could fail.
