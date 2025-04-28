@@ -288,6 +288,11 @@ typedef struct {
 } StatePredecessorMap;
 
 /*
+ * ParentStepIndices - The indices of all steps which have children.
+ */
+typedef Array(uint32_t) ParentStepIndices;
+
+/*
  * TSQuery - A tree query, compiled from a string of S-expressions. The query
  * itself is immutable. The mutable state used in the process of executing the
  * query is stored in a `TSQueryCursor`.
@@ -1475,54 +1480,7 @@ static void ts_query__perform_analysis(
   }
 }
 
-static bool ts_query__analyze_patterns(TSQuery *self, unsigned *error_offset) {
-  Array(uint16_t) non_rooted_pattern_start_steps = array_new();
-  for (unsigned i = 0; i < self->pattern_map.size; i++) {
-    PatternEntry *pattern = &self->pattern_map.contents[i];
-    if (!pattern->is_rooted) {
-      QueryStep *step = &self->steps.contents[pattern->step_index];
-      if (step->symbol != WILDCARD_SYMBOL) {
-        array_push(&non_rooted_pattern_start_steps, i);
-      }
-    }
-  }
-
-  // Walk forward through all of the steps in the query, computing some
-  // basic information about each step. Mark all of the steps that contain
-  // captures, and record the indices of all of the steps that have child steps.
-  Array(uint32_t) parent_step_indices = array_new();
-  for (unsigned i = 0; i < self->steps.size; i++) {
-    QueryStep *step = &self->steps.contents[i];
-    if (step->depth == PATTERN_DONE_MARKER) {
-      step->parent_pattern_guaranteed = true;
-      step->root_pattern_guaranteed = true;
-      continue;
-    }
-
-    bool has_children = false;
-    bool is_wildcard = step->symbol == WILDCARD_SYMBOL;
-    step->contains_captures = step->capture_ids[0] != NONE;
-    for (unsigned j = i + 1; j < self->steps.size; j++) {
-      QueryStep *next_step = &self->steps.contents[j];
-      if (
-        next_step->depth == PATTERN_DONE_MARKER ||
-        next_step->depth <= step->depth
-      ) break;
-      if (next_step->capture_ids[0] != NONE) {
-        step->contains_captures = true;
-      }
-      if (!is_wildcard) {
-        next_step->root_pattern_guaranteed = true;
-        next_step->parent_pattern_guaranteed = true;
-      }
-      has_children = true;
-    }
-
-    if (has_children && !is_wildcard) {
-      array_push(&parent_step_indices, i);
-    }
-  }
-
+AnalysisSubgraphArray ts_language_make_subgraphs(const TSQuery *self, const ParentStepIndices *parent_step_indices) {
   // For every parent symbol in the query, initialize an 'analysis subgraph'.
   // This subgraph lists all of the states in the parse table that are directly
   // involved in building subtrees for this symbol.
@@ -1532,8 +1490,8 @@ static bool ts_query__analyze_patterns(TSQuery *self, unsigned *error_offset) {
   // one of the parent nodes, such that their children appear to belong to the
   // parent.
   AnalysisSubgraphArray subgraphs = array_new();
-  for (unsigned i = 0; i < parent_step_indices.size; i++) {
-    uint32_t parent_step_index = parent_step_indices.contents[i];
+  for (unsigned i = 0; i < parent_step_indices->size; i++) {
+    uint32_t parent_step_index = parent_step_indices->contents[i];
     TSSymbol parent_symbol = self->steps.contents[parent_step_index].symbol;
     AnalysisSubgraph subgraph = { .symbol = parent_symbol };
     array_insert_sorted_by(&subgraphs, .symbol, subgraph);
@@ -1689,6 +1647,62 @@ static bool ts_query__analyze_patterns(TSQuery *self, unsigned *error_offset) {
       printf("\n");
     }
   #endif
+
+  array_delete(&next_nodes);
+  state_predecessor_map_delete(&predecessor_map);
+
+  return subgraphs;
+}
+
+static bool ts_query__analyze_patterns(TSQuery *self, unsigned *error_offset) {
+  Array(uint16_t) non_rooted_pattern_start_steps = array_new();
+  for (unsigned i = 0; i < self->pattern_map.size; i++) {
+    PatternEntry *pattern = &self->pattern_map.contents[i];
+    if (!pattern->is_rooted) {
+      QueryStep *step = &self->steps.contents[pattern->step_index];
+      if (step->symbol != WILDCARD_SYMBOL) {
+        array_push(&non_rooted_pattern_start_steps, i);
+      }
+    }
+  }
+
+  // Walk forward through all of the steps in the query, computing some
+  // basic information about each step. Mark all of the steps that contain
+  // captures, and record the indices of all of the steps that have child steps.
+  ParentStepIndices parent_step_indices = array_new();
+  for (unsigned i = 0; i < self->steps.size; i++) {
+    QueryStep *step = &self->steps.contents[i];
+    if (step->depth == PATTERN_DONE_MARKER) {
+      step->parent_pattern_guaranteed = true;
+      step->root_pattern_guaranteed = true;
+      continue;
+    }
+
+    bool has_children = false;
+    bool is_wildcard = step->symbol == WILDCARD_SYMBOL;
+    step->contains_captures = step->capture_ids[0] != NONE;
+    for (unsigned j = i + 1; j < self->steps.size; j++) {
+      QueryStep *next_step = &self->steps.contents[j];
+      if (
+        next_step->depth == PATTERN_DONE_MARKER ||
+        next_step->depth <= step->depth
+      ) break;
+      if (next_step->capture_ids[0] != NONE) {
+        step->contains_captures = true;
+      }
+      if (!is_wildcard) {
+        next_step->root_pattern_guaranteed = true;
+        next_step->parent_pattern_guaranteed = true;
+      }
+      has_children = true;
+    }
+
+    if (has_children && !is_wildcard) {
+      array_push(&parent_step_indices, i);
+    }
+  }
+
+  AnalysisSubgraphArray subgraphs = ts_language_make_subgraphs(self, &parent_step_indices);
 
   // For each non-terminal pattern, determine if the pattern can successfully match,
   // and identify all of the possible children within the pattern where matching could fail.
@@ -1964,11 +1978,9 @@ static bool ts_query__analyze_patterns(TSQuery *self, unsigned *error_offset) {
   }
   array_delete(&subgraphs);
   query_analysis__delete(&analysis);
-  array_delete(&next_nodes);
   array_delete(&non_rooted_pattern_start_steps);
   array_delete(&parent_step_indices);
   array_delete(&predicate_capture_ids);
-  state_predecessor_map_delete(&predecessor_map);
 
   return all_patterns_are_valid;
 }

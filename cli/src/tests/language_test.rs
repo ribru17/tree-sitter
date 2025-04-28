@@ -1,3 +1,4 @@
+use pretty_assertions::assert_eq;
 use tree_sitter::{self, Parser};
 
 use super::helpers::fixtures::get_language;
@@ -152,7 +153,6 @@ fn test_supertypes() {
                         "_literal_pattern",
                         "captured_pattern",
                         "const_block",
-                        "generic_pattern",
                         "identifier",
                         "macro_invocation",
                         "mut_pattern",
