@@ -1647,7 +1647,13 @@ AnalysisSubgraphArray ts_language_make_subgraphs(const TSLanguage *self) {
   return subgraphs;
 }
 
-static bool ts_query__validate_structure(TSQuery *self, unsigned *error_offset, const AnalysisSubgraphArray *subgraphs, ParentStepIndices *parent_step_indices, QueryAnalysis *analysis) {
+static bool ts_query__validate_structure(
+  TSQuery *self,
+  unsigned *error_offset,
+  const AnalysisSubgraphArray *subgraphs,
+  ParentStepIndices *parent_step_indices,
+  QueryAnalysis *analysis
+) {
   // For each non-terminal pattern, determine if the pattern can successfully match,
   // and identify all of the possible children within the pattern where matching could fail.
   for (unsigned i = 0; i < parent_step_indices->size; i++) {
@@ -1800,8 +1806,9 @@ static bool ts_query__analyze_patterns(TSQuery *self, unsigned *error_offset) {
 
   AnalysisSubgraphArray subgraphs = ts_language_make_subgraphs(self->language);
 
-  QueryAnalysis analysis = query_analysis__new();
   Array(uint16_t) predicate_capture_ids = array_new();
+
+  QueryAnalysis analysis = query_analysis__new();
   bool structure_is_valid = ts_query__validate_structure(self, error_offset, &subgraphs, &parent_step_indices, &analysis);
   if (!structure_is_valid) {
     goto cleanup;
@@ -2784,6 +2791,16 @@ static TSQueryError ts_query__parse_pattern(
   capture_quantifiers_mul(capture_quantifiers, quantifier);
 
   return 0;
+}
+
+bool ts_query_validate_structure(
+  const TSLanguage *language,
+  const char *source,
+  uint32_t source_len,
+  uint32_t *error_offset,
+  TSQueryError *error_type
+) {
+
 }
 
 TSQuery *ts_query_new(
