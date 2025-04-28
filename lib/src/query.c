@@ -1647,6 +1647,109 @@ AnalysisSubgraphArray ts_language_make_subgraphs(const TSLanguage *self) {
   return subgraphs;
 }
 
+static bool ts_query__validate_structure(TSQuery *self, unsigned *error_offset, const AnalysisSubgraphArray *subgraphs, ParentStepIndices *parent_step_indices, QueryAnalysis *analysis) {
+  // For each non-terminal pattern, determine if the pattern can successfully match,
+  // and identify all of the possible children within the pattern where matching could fail.
+  for (unsigned i = 0; i < parent_step_indices->size; i++) {
+    uint16_t parent_step_index = parent_step_indices->contents[i];
+    uint16_t parent_depth = self->steps.contents[parent_step_index].depth;
+    TSSymbol parent_symbol = self->steps.contents[parent_step_index].symbol;
+    if (parent_symbol == ts_builtin_sym_error) continue;
+
+    // Find the subgraph that corresponds to this pattern's root symbol. If the pattern's
+    // root symbol is a terminal, then return an error.
+    unsigned subgraph_index, exists;
+    array_search_sorted_by(subgraphs, .symbol, parent_symbol, &subgraph_index, &exists);
+    if (!exists) {
+      unsigned first_child_step_index = parent_step_index + 1;
+      uint32_t j, child_exists;
+      array_search_sorted_by(&self->step_offsets, .step_index, first_child_step_index, &j, &child_exists);
+      ts_assert(child_exists);
+      *error_offset = self->step_offsets.contents[j].byte_offset;
+      return false;
+    }
+
+    // Initialize an analysis state at every parse state in the table where
+    // this parent symbol can occur.
+    AnalysisSubgraph *subgraph = &subgraphs->contents[subgraph_index];
+    analysis_state_set__clear(&analysis->states, &analysis->state_pool);
+    analysis_state_set__clear(&analysis->deeper_states, &analysis->state_pool);
+    for (unsigned j = 0; j < subgraph->start_states.size; j++) {
+      TSStateId parse_state = subgraph->start_states.contents[j];
+      analysis_state_set__push(&analysis->states, &analysis->state_pool, &((AnalysisState) {
+        .step_index = parent_step_index + 1,
+        .stack = {
+          [0] = {
+            .parse_state = parse_state,
+            .parent_symbol = parent_symbol,
+            .child_index = 0,
+            .field_id = 0,
+            .done = false,
+          },
+        },
+        .depth = 1,
+        .root_symbol = parent_symbol,
+      }));
+    }
+
+    #ifdef DEBUG_ANALYZE_QUERY
+      printf(
+        "\nWalk states for %s:\n",
+        ts_language_symbol_name(self->language, analysis.states.contents[0]->stack[0].parent_symbol)
+      );
+    #endif
+
+    analysis->did_abort = false;
+    ts_query__perform_analysis(self, subgraphs, analysis);
+
+    // If this pattern could not be fully analyzed, then every step should
+    // be considered fallible.
+    if (analysis->did_abort) {
+      for (unsigned j = parent_step_index + 1; j < self->steps.size; j++) {
+        QueryStep *step = &self->steps.contents[j];
+        if (
+          step->depth <= parent_depth ||
+          step->depth == PATTERN_DONE_MARKER
+        ) break;
+        if (!step->is_dead_end) {
+          step->parent_pattern_guaranteed = false;
+          step->root_pattern_guaranteed = false;
+        }
+      }
+      continue;
+    }
+
+    // If this pattern cannot match, store the pattern index so that it can be
+    // returned to the caller.
+    if (analysis->finished_parent_symbols.size == 0) {
+      ts_assert(analysis->final_step_indices.size > 0);
+      uint16_t impossible_step_index = *array_back(&analysis->final_step_indices);
+      uint32_t j, impossible_exists;
+      array_search_sorted_by(&self->step_offsets, .step_index, impossible_step_index, &j, &impossible_exists);
+      if (j >= self->step_offsets.size) j = self->step_offsets.size - 1;
+      *error_offset = self->step_offsets.contents[j].byte_offset;
+      return false;
+    }
+
+    // Mark as fallible any step where a match terminated.
+    // Later, this property will be propagated to all of the step's predecessors.
+    for (unsigned j = 0; j < analysis->final_step_indices.size; j++) {
+      uint32_t final_step_index = analysis->final_step_indices.contents[j];
+      QueryStep *step = &self->steps.contents[final_step_index];
+      if (
+        step->depth != PATTERN_DONE_MARKER &&
+        step->depth > parent_depth &&
+        !step->is_dead_end
+      ) {
+        step->parent_pattern_guaranteed = false;
+        step->root_pattern_guaranteed = false;
+      }
+    }
+  }
+
+  return true;
+}
+
 static bool ts_query__analyze_patterns(TSQuery *self, unsigned *error_offset) {
   Array(uint16_t) non_rooted_pattern_start_steps = array_new();
   for (unsigned i = 0; i < self->pattern_map.size; i++) {
@@ -1697,108 +1800,8 @@ static bool ts_query__analyze_patterns(TSQuery *self, unsigned *error_offset) {
 
   AnalysisSubgraphArray subgraphs = ts_language_make_subgraphs(self->language);
 
-  // For each non-terminal pattern, determine if the pattern can successfully match,
-  // and identify all of the possible children within the pattern where matching could fail.
-  bool all_patterns_are_valid = true;
   QueryAnalysis analysis = query_analysis__new();
-  for (unsigned i = 0; i < parent_step_indices.size; i++) {
-    uint16_t parent_step_index = parent_step_indices.contents[i];
-    uint16_t parent_depth = self->steps.contents[parent_step_index].depth;
-    TSSymbol parent_symbol = self->steps.contents[parent_step_index].symbol;
-    if (parent_symbol == ts_builtin_sym_error) continue;
-
-    // Find the subgraph that corresponds to this pattern's root symbol. If the pattern's
-    // root symbol is a terminal, then return an error.
-    unsigned subgraph_index, exists;
-    array_search_sorted_by(&subgraphs, .symbol, parent_symbol, &subgraph_index, &exists);
-    if (!exists) {
-      unsigned first_child_step_index = parent_step_index + 1;
-      uint32_t j, child_exists;
-      array_search_sorted_by(&self->step_offsets, .step_index, first_child_step_index, &j, &child_exists);
-      ts_assert(child_exists);
-      *error_offset = self->step_offsets.contents[j].byte_offset;
-      all_patterns_are_valid = false;
-      break;
-    }
-
-    // Initialize an analysis state at every parse state in the table where
-    // this parent symbol can occur.
-    AnalysisSubgraph *subgraph = &subgraphs.contents[subgraph_index];
-    analysis_state_set__clear(&analysis.states, &analysis.state_pool);
-    analysis_state_set__clear(&analysis.deeper_states, &analysis.state_pool);
-    for (unsigned j = 0; j < subgraph->start_states.size; j++) {
-      TSStateId parse_state = subgraph->start_states.contents[j];
-      analysis_state_set__push(&analysis.states, &analysis.state_pool, &((AnalysisState) {
-        .step_index = parent_step_index + 1,
-        .stack = {
-          [0] = {
-            .parse_state = parse_state,
-            .parent_symbol = parent_symbol,
-            .child_index = 0,
-            .field_id = 0,
-            .done = false,
-          },
-        },
-        .depth = 1,
-        .root_symbol = parent_symbol,
-      }));
-    }
-
-    #ifdef DEBUG_ANALYZE_QUERY
-      printf(
-        "\nWalk states for %s:\n",
-        ts_language_symbol_name(self->language, analysis.states.contents[0]->stack[0].parent_symbol)
-      );
-    #endif
-
-    analysis.did_abort = false;
-    ts_query__perform_analysis(self, &subgraphs, &analysis);
-
-    // If this pattern could not be fully analyzed, then every step should
-    // be considered fallible.
-    if (analysis.did_abort) {
-      for (unsigned j = parent_step_index + 1; j < self->steps.size; j++) {
-        QueryStep *step = &self->steps.contents[j];
-        if (
-          step->depth <= parent_depth ||
-          step->depth == PATTERN_DONE_MARKER
-        ) break;
-        if (!step->is_dead_end) {
-          step->parent_pattern_guaranteed = false;
-          step->root_pattern_guaranteed = false;
-        }
-      }
-      continue;
-    }
-
-    // If this pattern cannot match, store the pattern index so that it can be
-    // returned to the caller.
-    if (analysis.finished_parent_symbols.size == 0) {
-      ts_assert(analysis.final_step_indices.size > 0);
-      uint16_t impossible_step_index = *array_back(&analysis.final_step_indices);
-      uint32_t j, impossible_exists;
-      array_search_sorted_by(&self->step_offsets, .step_index, impossible_step_index, &j, &impossible_exists);
-      if (j >= self->step_offsets.size) j = self->step_offsets.size - 1;
-      *error_offset = self->step_offsets.contents[j].byte_offset;
-      all_patterns_are_valid = false;
-      break;
-    }
-
-    // Mark as fallible any step where a match terminated.
-    // Later, this property will be propagated to all of the step's predecessors.
-    for (unsigned j = 0; j < analysis.final_step_indices.size; j++) {
-      uint32_t final_step_index = analysis.final_step_indices.contents[j];
-      QueryStep *step = &self->steps.contents[final_step_index];
-      if (
-        step->depth != PATTERN_DONE_MARKER &&
-        step->depth > parent_depth &&
-        !step->is_dead_end
-      ) {
-        step->parent_pattern_guaranteed = false;
-        step->root_pattern_guaranteed = false;
-      }
-    }
-  }
+  bool structure_is_valid = ts_query__validate_structure(self, error_offset, &subgraphs, &parent_step_indices, &analysis);
 
   // Mark as indefinite any step with captures that are used in predicates.
   Array(uint16_t) predicate_capture_ids = array_new();
@@ -1975,7 +1978,7 @@ static bool ts_query__analyze_patterns(TSQuery *self, unsigned *error_offset) {
   array_delete(&parent_step_indices);
   array_delete(&predicate_capture_ids);
 
-  return all_patterns_are_valid;
+  return structure_is_valid;
 }
 
 static void ts_query__add_negated_fields(
