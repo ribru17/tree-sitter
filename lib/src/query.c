@@ -1184,7 +1184,7 @@ static void ts_query__perform_analysis(
   array_clear(&analysis->finished_parent_symbols);
 
   for (unsigned iteration = 0;; iteration++) {
-    if (iteration == MAX_ANALYSIS_ITERATION_COUNT) {
+    if (iteration == MAX_ANALYSIS_ITERATION_COUNT || analysis->did_abort) {
       analysis->did_abort = true;
       break;
     }
